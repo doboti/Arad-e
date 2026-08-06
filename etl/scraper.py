@@ -1,7 +1,4 @@
-"""PoC scraper: current water levels for the "Hol a víz?" hero stations.
-
-Milestone 1 of the roadmap: download and print today's water level for
-Balaton (Siófok), Duna (Budapest) and Tisza (Szolnok) from vizugy.hu.
+"""Scraper for the "Hol a víz?" tracked stations.
 
 vizugy.hu has no public JSON API. Its homepage instead renders the entire
 national station list server-side into parallel JavaScript arrays (one
@@ -14,7 +11,7 @@ from __future__ import annotations
 
 import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import requests
 
@@ -36,12 +33,19 @@ ARRAY_FIELDS = {
     "lnv_cm": "LNV",  # Legnagyobb Vízállás - historical maximum
 }
 
-# Stations for the Milestone 1 PoC, identified by (river, station-name
-# substring) exactly as they appear on vizugy.hu.
+# Tracked stations: (river, station-name substring as it appears on
+# vizugy.hu, dashboard section, optional display-name override).
+#
+# "lakes" mirrors the spec's "Nagy Tavaink" module, "rivers" mirrors
+# "Folyók és Vízgyűjtők". Balaton/Duna(Bp)/Tisza(Szolnok) also double as
+# the dashboard's hero numbers.
 TARGET_STATIONS = [
-    ("Balaton", "Siófok"),
-    ("Duna", "Budapest"),
-    ("Tisza", "Szolnok"),
+    ("Balaton", "Siófok", "lakes", None),
+    ("Velencei-tó", "Agárd", "lakes", None),
+    ("Tisza", "Kisköre felső", "lakes", "Tisza-tó (Kisköre)"),
+    ("Duna", "Budapest", "rivers", None),
+    ("Duna", "Paks", "rivers", None),
+    ("Tisza", "Szolnok", "rivers", None),
 ]
 
 
@@ -57,6 +61,8 @@ class StationReading:
     measured_at: str
     lkv_cm: str
     lnv_cm: str
+    category: str = ""
+    display_name: str | None = None
 
 
 def fetch_html() -> str:
@@ -88,12 +94,12 @@ def parse_stations(html: str) -> list[StationReading]:
 
 def filter_targets(stations: list[StationReading]) -> list[StationReading]:
     result = []
-    for river, station_hint in TARGET_STATIONS:
+    for river, station_hint, category, display_name in TARGET_STATIONS:
         match = next((s for s in stations if s.river == river and station_hint in s.station), None)
         if match is None:
             print(f"WARNING: no match found for {river} / {station_hint}", file=sys.stderr)
             continue
-        result.append(match)
+        result.append(replace(match, category=category, display_name=display_name))
     return result
 
 
@@ -108,7 +114,8 @@ def main() -> None:
 
     print(f"Hol a víz? - aktuális vízállások ({SOURCE_URL})\n")
     for s in targets:
-        print(f"{s.river} ({s.station}, {s.cross_section})")
+        label = s.display_name or f"{s.river} ({s.station})"
+        print(f"[{s.category}] {label} - {s.cross_section}")
         print(f"  Vízállás: {s.water_level_cm}   Mérve: {s.measured_at}")
         print(f"  Vízhozam: {s.discharge_m3s}   Vízhőfok: {s.water_temp_c}")
         print(f"  LKV: {s.lkv_cm}   LNV: {s.lnv_cm}")

@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from scraper import StationReading
+from soil_moisture import SoilReading
 
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "holaviz.sqlite3"
 
@@ -23,7 +24,9 @@ CREATE TABLE IF NOT EXISTS stations (
     name          TEXT NOT NULL,
     cross_section TEXT,
     lkv_cm        REAL,
-    lnv_cm        REAL
+    lnv_cm        REAL,
+    category      TEXT,
+    display_name  TEXT
 );
 
 CREATE TABLE IF NOT EXISTS measurements (
@@ -35,6 +38,18 @@ CREATE TABLE IF NOT EXISTS measurements (
     water_temp_c   REAL,
     fetched_at     TEXT NOT NULL,
     UNIQUE(station_voa, measured_at)
+);
+
+CREATE TABLE IF NOT EXISTS soil_moisture (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    location    TEXT NOT NULL,
+    lat         REAL NOT NULL,
+    lon         REAL NOT NULL,
+    measured_at TEXT NOT NULL,
+    shallow_vwc REAL,
+    deep_vwc    REAL,
+    fetched_at  TEXT NOT NULL,
+    UNIQUE(location, measured_at)
 );
 """
 
@@ -64,10 +79,20 @@ def parse_measured_at(raw: str) -> str | None:
         return None
 
 
+def _add_missing_columns(conn: sqlite3.Connection, table: str, columns: dict[str, str]) -> None:
+    """Migrate an older DB file created before these columns existed."""
+    existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+    for name, coltype in columns.items():
+        if name not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {coltype}")
+
+
 def connect(db_path: Path = DB_PATH) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     conn.executescript(SCHEMA)
+    _add_missing_columns(conn, "stations", {"category": "TEXT", "display_name": "TEXT"})
+    conn.commit()
     return conn
 
 
@@ -83,14 +108,19 @@ def save_readings(conn: sqlite3.Connection, readings: list[StationReading]) -> i
     for r in readings:
         conn.execute(
             """
-            INSERT INTO stations (voa, river, name, cross_section, lkv_cm, lnv_cm)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO stations (voa, river, name, cross_section, lkv_cm, lnv_cm, category, display_name)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(voa) DO UPDATE SET
                 river=excluded.river, name=excluded.name,
                 cross_section=excluded.cross_section,
-                lkv_cm=excluded.lkv_cm, lnv_cm=excluded.lnv_cm
+                lkv_cm=excluded.lkv_cm, lnv_cm=excluded.lnv_cm,
+                category=excluded.category, display_name=excluded.display_name
             """,
-            (r.voa, r.river, r.station, r.cross_section, parse_number(r.lkv_cm), parse_number(r.lnv_cm)),
+            (
+                r.voa, r.river, r.station, r.cross_section,
+                parse_number(r.lkv_cm), parse_number(r.lnv_cm),
+                r.category, r.display_name,
+            ),
         )
 
         measured_at = parse_measured_at(r.measured_at) or fetched_at
@@ -108,6 +138,25 @@ def save_readings(conn: sqlite3.Connection, readings: list[StationReading]) -> i
                 parse_number(r.water_temp_c),
                 fetched_at,
             ),
+        )
+        inserted += cur.rowcount
+
+    conn.commit()
+    return inserted
+
+
+def save_soil_readings(conn: sqlite3.Connection, readings: list[SoilReading]) -> int:
+    """Insert new soil-moisture rows, deduped on (location, measured_at)."""
+    fetched_at = datetime.now(timezone.utc).isoformat()
+    inserted = 0
+    for r in readings:
+        cur = conn.execute(
+            """
+            INSERT OR IGNORE INTO soil_moisture
+                (location, lat, lon, measured_at, shallow_vwc, deep_vwc, fetched_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (r.location, r.lat, r.lon, r.measured_at, r.shallow_vwc, r.deep_vwc, fetched_at),
         )
         inserted += cur.rowcount
 
