@@ -31,21 +31,23 @@ ARRAY_FIELDS = {
     "measured_at": "UtolsoMeresIdopontja",
     "lkv_cm": "LKV",  # Legkisebb Vízállás - historical minimum
     "lnv_cm": "LNV",  # Legnagyobb Vízállás - historical maximum
+    "kf1_cm": "IKeszultsegiSzint",  # I. fokozatú (official) flood-alert level, where defined
 }
 
 # Tracked stations: (river, station-name substring as it appears on
-# vizugy.hu, dashboard section, optional display-name override).
+# vizugy.hu, dashboard section, display-name override, lat, lon).
 #
 # "lakes" mirrors the spec's "Nagy Tavaink" module, "rivers" mirrors
 # "Folyók és Vízgyűjtők". Balaton/Duna(Bp)/Tisza(Szolnok) also double as
-# the dashboard's hero numbers.
+# the dashboard's hero numbers. Coordinates are the settlement's, not the
+# exact gauge - close enough for a national overview map.
 TARGET_STATIONS = [
-    ("Balaton", "Siófok", "lakes", None),
-    ("Velencei-tó", "Agárd", "lakes", None),
-    ("Tisza", "Kisköre felső", "lakes", "Tisza-tó (Kisköre)"),
-    ("Duna", "Budapest", "rivers", None),
-    ("Duna", "Paks", "rivers", None),
-    ("Tisza", "Szolnok", "rivers", None),
+    ("Balaton", "Siófok", "lakes", None, 46.9057, 18.0525),
+    ("Velencei-tó", "Agárd", "lakes", None, 47.1898, 18.6142),
+    ("Tisza", "Kisköre felső", "lakes", "Tisza-tó (Kisköre)", 47.4939, 20.0994),
+    ("Duna", "Budapest", "rivers", None, 47.4979, 19.0402),
+    ("Duna", "Paks", "rivers", None, 46.6229, 18.8529),
+    ("Tisza", "Szolnok", "rivers", None, 47.1621, 20.1826),
 ]
 
 
@@ -61,8 +63,11 @@ class StationReading:
     measured_at: str
     lkv_cm: str
     lnv_cm: str
+    kf1_cm: str
     category: str = ""
     display_name: str | None = None
+    lat: float | None = None
+    lon: float | None = None
 
 
 def fetch_html() -> str:
@@ -94,12 +99,12 @@ def parse_stations(html: str) -> list[StationReading]:
 
 def filter_targets(stations: list[StationReading]) -> list[StationReading]:
     result = []
-    for river, station_hint, category, display_name in TARGET_STATIONS:
+    for river, station_hint, category, display_name, lat, lon in TARGET_STATIONS:
         match = next((s for s in stations if s.river == river and station_hint in s.station), None)
         if match is None:
             print(f"WARNING: no match found for {river} / {station_hint}", file=sys.stderr)
             continue
-        result.append(replace(match, category=category, display_name=display_name))
+        result.append(replace(match, category=category, display_name=display_name, lat=lat, lon=lon))
     return result
 
 

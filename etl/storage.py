@@ -25,8 +25,11 @@ CREATE TABLE IF NOT EXISTS stations (
     cross_section TEXT,
     lkv_cm        REAL,
     lnv_cm        REAL,
+    kf1_cm        REAL,
     category      TEXT,
-    display_name  TEXT
+    display_name  TEXT,
+    lat           REAL,
+    lon           REAL
 );
 
 CREATE TABLE IF NOT EXISTS measurements (
@@ -91,7 +94,11 @@ def connect(db_path: Path = DB_PATH) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     conn.executescript(SCHEMA)
-    _add_missing_columns(conn, "stations", {"category": "TEXT", "display_name": "TEXT"})
+    _add_missing_columns(
+        conn,
+        "stations",
+        {"category": "TEXT", "display_name": "TEXT", "kf1_cm": "REAL", "lat": "REAL", "lon": "REAL"},
+    )
     conn.commit()
     return conn
 
@@ -108,18 +115,20 @@ def save_readings(conn: sqlite3.Connection, readings: list[StationReading]) -> i
     for r in readings:
         conn.execute(
             """
-            INSERT INTO stations (voa, river, name, cross_section, lkv_cm, lnv_cm, category, display_name)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO stations
+                (voa, river, name, cross_section, lkv_cm, lnv_cm, kf1_cm, category, display_name, lat, lon)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(voa) DO UPDATE SET
                 river=excluded.river, name=excluded.name,
                 cross_section=excluded.cross_section,
-                lkv_cm=excluded.lkv_cm, lnv_cm=excluded.lnv_cm,
-                category=excluded.category, display_name=excluded.display_name
+                lkv_cm=excluded.lkv_cm, lnv_cm=excluded.lnv_cm, kf1_cm=excluded.kf1_cm,
+                category=excluded.category, display_name=excluded.display_name,
+                lat=excluded.lat, lon=excluded.lon
             """,
             (
                 r.voa, r.river, r.station, r.cross_section,
-                parse_number(r.lkv_cm), parse_number(r.lnv_cm),
-                r.category, r.display_name,
+                parse_number(r.lkv_cm), parse_number(r.lnv_cm), parse_number(r.kf1_cm),
+                r.category, r.display_name, r.lat, r.lon,
             ),
         )
 

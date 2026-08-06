@@ -30,7 +30,39 @@ HERO_STATIONS = [("Balaton", "Siófok"), ("Duna", "Budapest"), ("Duna", "Paks"),
 
 SECTION_TITLES = {"lakes": "Nagy tavaink", "rivers": "Folyók és vízgyűjtők"}
 
+# Status colors/labels for the overview map, matching the spec's
+# kék/zöld/sárga/piros (blue/green/yellow/red) scheme.
+STATUS_STYLE = {
+    "flood": ("#1f77b4", "Áradás"),
+    "normal": ("#2ca02c", "Normál"),
+    "low": ("#f1c40f", "Alacsony"),
+    "critical": ("#e74c3c", "Kritikus aszály / kiszáradás"),
+}
+
 st.set_page_config(page_title="Hol a víz?", page_icon="💧", layout="wide")
+
+
+def classify_status(level: float | None, lkv: float | None, lnv: float | None, kf1: float | None) -> str:
+    """Heuristic status for the overview map.
+
+    Uses the official I. fokozatú flood-alert level (kf1) when vizugy.hu
+    publishes one for that station; otherwise falls back to the station's
+    position between its historical min (LKV) and max (LNV). The specific
+    cutoffs (35% / 12%) aren't an official standard - just a reasonable
+    default absent real defense-stage data for every station.
+    """
+    if level is None:
+        return "normal"
+    if kf1 is not None and level >= kf1:
+        return "flood"
+    if lkv is None or lnv is None or lnv <= lkv:
+        return "normal"
+    position = (level - lkv) / (lnv - lkv)
+    if position >= 0.35:
+        return "normal"
+    if position >= 0.12:
+        return "low"
+    return "critical"
 
 
 def label_for(row: pd.Series) -> str:
@@ -51,7 +83,8 @@ def load_measurements() -> pd.DataFrame:
     try:
         return pd.read_sql_query(
             """
-            SELECT s.voa, s.river, s.name, s.category, s.display_name, s.lkv_cm, s.lnv_cm,
+            SELECT s.voa, s.river, s.name, s.category, s.display_name,
+                   s.lkv_cm, s.lnv_cm, s.kf1_cm, s.lat, s.lon,
                    m.measured_at, m.water_level_cm, m.discharge_m3s, m.water_temp_c
             FROM measurements m
             JOIN stations s ON s.voa = m.station_voa
@@ -110,6 +143,46 @@ def render_hero_numbers(df: pd.DataFrame, soil_df: pd.DataFrame) -> None:
         with cols[-1]:
             st.metric(label="Talajnedvesség (országos átlag)", value=f"{avg_shallow * 100:.0f}%")
             st.caption(f"{len(latest_soil)} mintaponton, felső ~9 cm")
+
+
+def render_map(df: pd.DataFrame) -> None:
+    latest = df.sort_values("measured_at").groupby("voa").last().reset_index()
+    latest = latest.dropna(subset=["lat", "lon"])
+    if latest.empty:
+        return
+
+    latest["status"] = latest.apply(
+        lambda r: classify_status(r["water_level_cm"], r["lkv_cm"], r["lnv_cm"], r["kf1_cm"]), axis=1
+    )
+    latest["color"] = latest["status"].map(lambda s: STATUS_STYLE[s][0])
+    latest["label"] = latest.apply(label_for, axis=1)
+    latest["hover"] = latest.apply(
+        lambda r: f"{r['label']}<br>{r['water_level_cm']:.0f} cm<br>{STATUS_STYLE[r['status']][1]}", axis=1
+    )
+
+    fig = go.Figure(
+        go.Scattermapbox(
+            lat=latest["lat"],
+            lon=latest["lon"],
+            mode="markers+text",
+            marker=dict(size=16, color=latest["color"]),
+            text=latest["label"],
+            textposition="top center",
+            hovertext=latest["hover"],
+            hoverinfo="text",
+        )
+    )
+    fig.update_layout(
+        mapbox=dict(style="open-street-map", center=dict(lat=47.16, lon=19.5), zoom=6.1),
+        margin=dict(l=0, r=0, t=0, b=0),
+        height=480,
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    legend = "&nbsp;&nbsp;&nbsp;".join(
+        f'<span style="color:{color}">●</span> {label}' for color, label in STATUS_STYLE.values()
+    )
+    st.markdown(legend, unsafe_allow_html=True)
 
 
 def render_history_charts(df: pd.DataFrame, category: str) -> None:
@@ -202,6 +275,10 @@ def main() -> None:
         return
 
     render_hero_numbers(df, soil_df)
+
+    st.divider()
+    st.subheader("Országos helyzetkép")
+    render_map(df)
 
     for category, title in SECTION_TITLES.items():
         st.divider()
