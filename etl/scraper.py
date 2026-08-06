@@ -24,6 +24,7 @@ REQUEST_TIMEOUT = 15
 
 # Field name -> JS array variable name on the vizugy.hu homepage.
 ARRAY_FIELDS = {
+    "voa": "AllomasVOA",  # stable station GUID, used as the external ID
     "river": "VizfolyasNev",
     "station": "VizmerceNev",
     "cross_section": "Szelveny",
@@ -46,6 +47,7 @@ TARGET_STATIONS = [
 
 @dataclass
 class StationReading:
+    voa: str
     river: str
     station: str
     cross_section: str
