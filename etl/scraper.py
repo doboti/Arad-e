@@ -10,14 +10,36 @@ directly, which is far more stable than scraping a rendered table.
 from __future__ import annotations
 
 import re
+import ssl
 import sys
 from dataclasses import dataclass, replace
+from pathlib import Path
 
+import certifi
 import requests
+from requests.adapters import HTTPAdapter
 
 SOURCE_URL = "https://www.vizugy.hu/"
 USER_AGENT = "Mozilla/5.0 (compatible; HolAVizBot/0.1; +https://github.com/)"
 REQUEST_TIMEOUT = 15
+
+# vizugy.hu's server doesn't send its full TLS chain: it's missing the
+# "e-Szigno RSA OV TLS CA 2026" intermediate and the still-new
+# "e-Szigno RSA TLS Root CA 2025" root (which is itself cross-signed by an
+# already-trusted older e-Szigno root). Browsers paper over this by fetching
+# the missing certs via AIA; plain requests/urllib3 doesn't, so every hourly
+# run has been failing with CERTIFICATE_VERIFY_FAILED since the site's cert
+# rotation. Rather than disabling verification, trust these two extra certs
+# on top of the normal certifi bundle - full chain validation still applies.
+_EXTRA_CA_BUNDLE = Path(__file__).resolve().parent / "certs" / "e-szigno-rsa-2025-chain.pem"
+
+
+class _ExtraTrustAdapter(HTTPAdapter):
+    def init_poolmanager(self, *args, **kwargs):
+        ctx = ssl.create_default_context(cafile=certifi.where())
+        ctx.load_verify_locations(cafile=str(_EXTRA_CA_BUNDLE))
+        kwargs["ssl_context"] = ctx
+        super().init_poolmanager(*args, **kwargs)
 
 # Field name -> JS array variable name on the vizugy.hu homepage.
 ARRAY_FIELDS = {
@@ -71,7 +93,9 @@ class StationReading:
 
 
 def fetch_html() -> str:
-    resp = requests.get(SOURCE_URL, headers={"User-Agent": USER_AGENT}, timeout=REQUEST_TIMEOUT)
+    session = requests.Session()
+    session.mount("https://", _ExtraTrustAdapter())
+    resp = session.get(SOURCE_URL, headers={"User-Agent": USER_AGENT}, timeout=REQUEST_TIMEOUT)
     resp.raise_for_status()
     resp.encoding = "utf-8"
     return resp.text
